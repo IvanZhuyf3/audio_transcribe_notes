@@ -1,0 +1,14 @@
+# API keys and tokens
+config.ini
+
+# Python
+__pycache__/
+*.pyc
+
+# Output
+output/
+monitor_temp/
+
+# Monitor state
+state.json
+state.json.tmp

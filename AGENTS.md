@@ -1,0 +1,70 @@
+# AGENTS.md — Audio Transcribe Notes
+
+## What This Is
+
+Two-file Python project: `transcribe.py` (ASR + image matching pipeline) + `monitor.py` (file watcher + Obsidian publisher). Pure procedural, no classes. Windows-only, GPU-accelerated meeting notes generator.
+
+Architecture details live in `CLAUDE.md` — read it for function reference, data flow, and state machine docs.
+
+## Critical Path Facts
+
+### Venv & Dependencies
+
+- **Venv path**: `C:\Users\Yifan\venvs\audio_transcribe\` (bat files are truth, not CLAUDE.md's `~/.virtualenvs/`)
+- **requirements.txt is incomplete** — only lists Pillow/pillow-heif/openai. Heavy deps installed separately:
+  - `torch` + `torchaudio` from PyTorch CUDA 12.6 wheel (`--index-url https://download.pytorch.org/whl/cu126`)
+  - `whisperx` (pip install, brings pyannote)
+- **FFmpeg/ffprobe must be on PATH** — external binary called via subprocess for audio duration probing
+- **Python 3.13**
+
+### Config & Secrets
+
+- `config.ini` is **gitignored** (contains plaintext HF token + DeepSeek API key). Auto-created on first run with empty fields.
+- Default model is `large-v3` (not `large` — CLAUDE.md is stale on this).
+- `dictionary.md` is tracked — domain terms fed to DeepSeek for ASR correction.
+
+### No Test Suite
+
+- `test/` folder contains **real test data** (`.m4a` + `.jpg` files), not unit tests.
+- No pytest, no test framework, no assertions.
+- **To verify changes**: run `transcribe.py` against `test/` folder manually:
+  ```
+  call C:\Users\Yifan\venvs\audio_transcribe\Scripts\activate.bat
+  set PYTHONIOENCODING=utf-8
+  set HF_HUB_DISABLE_SYMLINKS_WARNING=1
+  python transcribe.py --input ./test --output ./test_output --language en
+  ```
+- No git repo, no CI — no automated verification exists.
+
+## Windows Encoding Gotcha
+
+**Every `open()`, `read_text()`, `write_text()` must use `encoding="utf-8"`**. Windows defaults to GBK on Chinese locale. Running Python without `PYTHONIOENCODING=utf-8` will fail on any file with CJK/special characters.
+
+This is already handled in the source — don't break it when editing.
+
+## Pipeline Contract
+
+The **detailed .md** (`*_detailed.md`) is the machine-parseable intermediate format between pipeline steps:
+- Contains `<!-- audio_start: ISO_TIMESTAMP -->` metadata header
+- Segments follow `**Speaker** (HH:MM:SS)` format
+- Image insertion is **idempotent** — re-running `insert-images` strips existing images and re-inserts
+- `parse_detailed_markdown()` reads this format back into structured items
+
+When editing `transcribe.py`, preserve the detailed .md format or you break the `insert-images` and `render` subcommands.
+
+## What Not To Do
+
+- Don't add classes — project is intentionally procedural
+- Don't run `pip install` inside the project dir — venv is outside OneDrive for a reason
+- Don't commit `config.ini`, `state.json`, or `output/`
+- Don't assume `requirements.txt` reflects all deps
+- Don't use `as any`, `# type: ignore`, or suppress errors
+- Don't refactor while fixing bugs — minimal fixes only
+
+## Monitor (`monitor.py`)
+
+Long-running process with state machine. State in `state.json` (atomic writes via `.tmp` + `os.replace`). If modifying monitor logic:
+- TRANSCRIBING state crash → must revert to DISCOVERED (see `reset_interrupted()`)
+- File stability check before transcription — `file_stable()` waits for size to stop changing
+- One transcription at a time (GPU constraint)
+- DONE entries auto-pruned after 30 days
