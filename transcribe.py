@@ -256,64 +256,94 @@ def _vad_split(wav: "np.ndarray", max_seconds: float = 180.0) -> list[tuple[int,
     return chunks if chunks else [(0, len(wav), wav)]
 
 
-def _merge_chars_with_speakers(
-    chars: list[dict],
+def _build_sentence_segments(
+    text: str, time_stamps: list, offset_s: float = 0.0,
+) -> list[dict]:
+    """Split transcription text into sentence-level segments with timing.
+
+    text: full transcription with punctuation (from result.text).
+    time_stamps: char-level timestamps (from result.time_stamps), no punctuation.
+    offset_s: seconds offset for this chunk within the full audio.
+
+    Returns: [{start, end, text}, ...] split at sentence boundaries.
+    """
+    import re
+
+    # Sentence-ending punctuation (Chinese + English)
+    SENTENCE_END = set("。！？!?.")
+
+    # Build alignment: walk text chars, skipping punctuation to consume time_stamps
+    char_timing = []  # (char_index_in_text, start, end) for non-punct chars
+    ts_idx = 0
+    for text_idx, ch in enumerate(text):
+        if ts_idx >= len(time_stamps):
+            break
+        # Punctuation chars in text have no corresponding timestamp
+        if ch in "，。！？、；：""''（）【】《》…—,.!?;:'\"()[]{}/\u3000 ":
+            continue
+        ts = time_stamps[ts_idx]
+        char_timing.append((text_idx, ts.start_time + offset_s, ts.end_time + offset_s))
+        ts_idx += 1
+
+    if not char_timing:
+        return []
+
+    # Split text at sentence-ending punctuation, preserving timing
+    segments = []
+    seg_start_idx = 0  # index into char_timing
+
+    for i in range(len(text)):
+        if text[i] in SENTENCE_END or i == len(text) - 1:
+            # Find the char_timing range for text[seg_start_idx:i+1]
+            # Get text slice including the punctuation
+            seg_text = text[seg_start_idx:i + 1].strip()
+            if not seg_text:
+                continue
+
+            # Find first and last char_timing entries in this range
+            first_ts = None
+            last_ts = None
+            for ct_text_idx, ct_start, ct_end in char_timing:
+                if seg_start_idx <= ct_text_idx <= i:
+                    if first_ts is None:
+                        first_ts = (ct_start, ct_end)
+                    last_ts = (ct_start, ct_end)
+
+            if first_ts and last_ts:
+                segments.append({
+                    "start": first_ts[0],
+                    "end": last_ts[1],
+                    "text": seg_text,
+                })
+            seg_start_idx = i + 1
+
+    return segments
+
+
+def _assign_speakers(
+    segments: list[dict],
     speaker_turns: list[tuple[float, float, str]],
 ) -> list[dict]:
-    """Merge character-level timestamps with speaker labels.
+    """Assign speaker labels to segments based on time overlap.
 
-    chars: [{text, start, end}, ...]
+    segments: [{start, end, text}, ...]
     speaker_turns: [(start, end, speaker), ...]
-    Returns: [{start, end, text, speaker}, ...] grouped by speaker.
+    Returns: [{start, end, text, speaker}, ...]
     """
-    if not chars or not speaker_turns:
-        # No diarization — return as-is with unknown speaker
-        return [
-            {"start": c["start"], "end": c["end"], "text": c["text"], "speaker": "Speaker ?"}
-            for c in chars
-        ]
+    if not speaker_turns:
+        for seg in segments:
+            seg["speaker"] = "Speaker ?"
+        return segments
 
-    # Assign each char to the speaker with most overlap
-    char_speakers = []
-    for c in chars:
+    for seg in segments:
         best_speaker = "Speaker ?"
         best_overlap = 0.0
         for sp_start, sp_end, sp_label in speaker_turns:
-            overlap = max(0, min(c["end"], sp_end) - max(c["start"], sp_start))
+            overlap = max(0, min(seg["end"], sp_end) - max(seg["start"], sp_start))
             if overlap > best_overlap:
                 best_overlap = overlap
                 best_speaker = sp_label
-        char_speakers.append(best_speaker)
-
-    # Group consecutive same-speaker chars into segments
-    segments = []
-    cur_speaker = char_speakers[0] if char_speakers else "Speaker ?"
-    cur_text = []
-    cur_start = chars[0]["start"] if chars else 0.0
-    cur_end = chars[0]["end"] if chars else 0.0
-
-    for i, c in enumerate(chars):
-        sp = char_speakers[i]
-        if sp != cur_speaker and cur_text:
-            segments.append({
-                "start": cur_start,
-                "end": cur_end,
-                "text": "".join(cur_text),
-                "speaker": cur_speaker,
-            })
-            cur_speaker = sp
-            cur_start = c["start"]
-            cur_text = []
-        cur_text.append(c["text"])
-        cur_end = c["end"]
-
-    if cur_text:
-        segments.append({
-            "start": cur_start,
-            "end": cur_end,
-            "text": "".join(cur_text),
-            "speaker": cur_speaker,
-        })
+        seg["speaker"] = best_speaker
 
     return segments
 
@@ -375,7 +405,7 @@ def run_qwen3_asr(
 
     # ── Step 4: Transcribe each chunk ───────────────────────────────
     lang_param = _map_language(language)
-    all_chars = []
+    all_segments = []
 
     for i, (start_s, end_s, chunk_wav) in enumerate(chunks):
         offset_s = start_s / sr
@@ -387,13 +417,9 @@ def run_qwen3_asr(
             return_time_stamps=True,
         )
         for r in results:
-            if r.time_stamps:
-                for ts in r.time_stamps:
-                    all_chars.append({
-                        "text": ts.text,
-                        "start": ts.start_time + offset_s,
-                        "end": ts.end_time + offset_s,
-                    })
+            if r.text.strip() and r.time_stamps:
+                segs = _build_sentence_segments(r.text, r.time_stamps, offset_s)
+                all_segments.extend(segs)
 
     detected_lang = results[0].language if results else (language or "unknown")
     print(f"  Detected language: {detected_lang}")
@@ -404,7 +430,7 @@ def run_qwen3_asr(
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    if not all_chars:
+    if not all_segments:
         print("  Warning: No transcription produced")
         return []
 
@@ -432,8 +458,8 @@ def run_qwen3_asr(
     except Exception as e:
         print(f"  Warning: Diarization failed ({e}), skipping speaker labels")
 
-    # ── Step 7: Merge chars with speakers ───────────────────────────
-    segments = _merge_chars_with_speakers(all_chars, speaker_turns)
+    # ── Step 7: Assign speakers to sentence segments ────────────────
+    segments = _assign_speakers(all_segments, speaker_turns)
     print(f"  Produced {len(segments)} segments")
     return segments
 
