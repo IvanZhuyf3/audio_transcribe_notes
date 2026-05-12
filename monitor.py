@@ -266,14 +266,15 @@ def _do_transcribe(state: dict, key: str, config):
 
     # AI clean
     api_key = defaults.get("deepseek_api_key", "")
+    deepseek_model = defaults.get("deepseek_model", "deepseek-v4-flash")
     if api_key:
         dict_path = Path(__file__).parent / defaults.get("dictionary", "dictionary.md")
         dict_text = load_dictionary(dict_path)
-        items = ai_clean(items, api_key, dict_text)
+        items = ai_clean(items, api_key, dict_text, model=deepseek_model)
 
     # Generate theme
     transcript = " ".join(it["text"] for it in items if it["type"] == "text")
-    theme = generate_theme(transcript, api_key) if api_key else "Meeting"
+    theme = generate_theme(transcript, api_key, model=deepseek_model) if api_key else "Meeting"
     theme = sanitize_filename(theme)
     time_str = audio_start.strftime("%Hh%M")
     title = f"{theme}-{time_str}"

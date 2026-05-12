@@ -943,6 +943,7 @@ def load_config() -> configparser.ConfigParser:
         config["defaults"] = {
             "hf_token": "",
             "deepseek_api_key": "",
+            "deepseek_model": "deepseek-v4-flash",
             "language": "auto",
             "output_dir": "output",
             "model": "Qwen/Qwen3-ASR-1.7B",
@@ -997,6 +998,7 @@ def _resolve_defaults(args, config):
         "title": args.title or "Meeting Notes",
         "no_clean": args.no_clean,
         "deepseek_api_key": args.deepseek_api_key or defaults.get("deepseek_api_key", ""),
+        "deepseek_model": defaults.get("deepseek_model", "deepseek-v4-flash"),
         "dictionary_path": (
             Path(args.dictionary) if args.dictionary
             else Path(__file__).parent / defaults.get("dictionary", "dictionary.md")
@@ -1068,7 +1070,7 @@ def _run_pipeline(args, config):
 
         if not opts["no_clean"] and opts["deepseek_api_key"]:
             dictionary_text = load_dictionary(opts["dictionary_path"])
-            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text)
+            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text, model=opts["deepseek_model"])
         elif not opts["no_clean"] and not opts["deepseek_api_key"]:
             print("  Skipping AI cleaning (no DeepSeek API key — set in config.ini or use --deepseek-api-key)")
 
@@ -1152,7 +1154,7 @@ def _run_transcribe(args, config):
 
         if not opts["no_clean"] and opts["deepseek_api_key"]:
             dictionary_text = load_dictionary(opts["dictionary_path"])
-            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text)
+            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text, model=opts["deepseek_model"])
         elif not opts["no_clean"] and not opts["deepseek_api_key"]:
             print("  Skipping AI cleaning (no DeepSeek API key — set in config.ini or use --deepseek-api-key)")
 
