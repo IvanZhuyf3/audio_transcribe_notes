@@ -136,6 +136,8 @@ Full pipeline (backward compat) runs all three steps in sequence.
 | `generate_markdown()` | Write detailed MD from items (with images if present) |
 | `clean_markdown()` | Merge same-speaker paragraphs, strip timestamps |
 | `generate_theme()` | DeepSeek 2-4 word title from transcript text |
+| `publish_to_obsidian()` | Copy clean.md + images to Obsidian vault, rewrite image paths |
+| `_rewrite_obsidian_paths()` | Rewrite `images/photo_NNN.ext` → `images/SUBDIR/photo_NNN.ext` |
 
 ### CLI Subcommands
 
@@ -147,6 +149,9 @@ python transcribe.py -i ./folder
 python transcribe.py transcribe -i ./folder          # Step 1
 python transcribe.py insert-images -d ./file.md -p ./photos  # Step 2
 python transcribe.py render -d ./file.md              # Step 3
+
+# Publish to Obsidian
+python transcribe.py publish -d ./file_detailed.md --vault /path/to/vault [--subfolder "Meeting Notes"]
 ```
 
 All pipeline flags (`--hf-token`, `--language`, `--model`, etc.) work on both the default and `transcribe` subcommand.

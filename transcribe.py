@@ -1201,6 +1201,103 @@ def _run_render(args):
     print(f"  Clean: {clean_path}")
 
 
+# ── Obsidian publish ────────────────────────────────────────────────
+
+def _obsidian_image_subdir(audio_start: datetime) -> str:
+    """Per-meeting image subdirectory name."""
+    return audio_start.strftime("%Y-%m-%d_%Hh%M")
+
+
+def _rewrite_obsidian_paths(md_text: str, img_subdir: str) -> str:
+    """Rewrite image paths from 'images/photo_NNN.ext' to 'images/SUBDIR/photo_NNN.ext'."""
+    return re.sub(
+        r"\(images/(photo_\d+\.\w+)\)",
+        rf"(images/{img_subdir}/\1)",
+        md_text,
+    )
+
+
+def publish_to_obsidian(
+    detailed_path: Path,
+    vault_path: Path,
+    subfolder: str = "",
+    title: str | None = None,
+) -> Path:
+    """Publish a detailed.md to Obsidian vault.
+
+    Generates clean .md, rewrites image paths, copies images and .md to vault.
+    Returns the path to the published .md file.
+    """
+    # Parse audio_start from detailed.md metadata
+    parsed = parse_detailed_markdown(detailed_path)
+    if not parsed or not parsed.get("audio_start"):
+        print("  Error: Could not find audio_start metadata in detailed.md")
+        sys.exit(1)
+    audio_start = parsed["audio_start"]
+
+    # Generate clean.md
+    clean_path = clean_markdown(detailed_path)
+
+    # Read and rewrite image paths
+    img_subdir = _obsidian_image_subdir(audio_start)
+    content = clean_path.read_text(encoding="utf-8")
+    content = _rewrite_obsidian_paths(content, img_subdir)
+
+    # Determine title
+    if not title:
+        title = parsed.get("title", "Meeting Notes")
+        # Fallback to filename stem if default title
+        if title == "Meeting Notes":
+            title = detailed_path.parent.name
+
+    # Sanitize title for filesystem
+    assert title is not None  # guaranteed by above logic
+    title = re.sub(r'[\\/*?:"<>|]', "", title)
+    title = re.sub(r"\s+", " ", title).strip()[:80] or "Meeting"
+
+    # Target paths
+    target_dir = vault_path / subfolder if subfolder else vault_path
+    target_dir.mkdir(parents=True, exist_ok=True)
+    obsidian_md = target_dir / f"{title}.md"
+    obsidian_img_dir = target_dir / "images" / img_subdir
+
+    # Copy images
+    src_images = detailed_path.parent / "images"
+    if src_images.exists():
+        obsidian_img_dir.mkdir(parents=True, exist_ok=True)
+        for img in src_images.iterdir():
+            if img.is_file():
+                shutil.copy2(img, obsidian_img_dir / img.name)
+
+    # Write .md
+    obsidian_md.write_text(content, encoding="utf-8")
+    print(f"  Published: {obsidian_md}")
+    if src_images.exists():
+        print(f"  Images:    {obsidian_img_dir}")
+
+    return obsidian_md
+
+
+def _run_publish(args):
+    """Publish detailed.md to Obsidian vault."""
+    md_path = Path(args.detailed).resolve()
+    vault_path = Path(args.vault).resolve()
+
+    if not md_path.is_file():
+        print(f"Error: {md_path} is not a file")
+        sys.exit(1)
+    if not vault_path.is_dir():
+        print(f"Error: {vault_path} is not a directory")
+        sys.exit(1)
+
+    publish_to_obsidian(
+        detailed_path=md_path,
+        vault_path=vault_path,
+        subfolder=args.subfolder or "",
+        title=args.title,
+    )
+
+
 def main():
     config = load_config()
 
@@ -1234,6 +1331,19 @@ def main():
     p_render.add_argument("-d", "--detailed", required=True,
                           help="Path to detailed .md file")
 
+    # publish: detailed.md → Obsidian vault
+    p_publish = subparsers.add_parser(
+        "publish", help="Publish detailed .md to Obsidian vault"
+    )
+    p_publish.add_argument("-d", "--detailed", required=True,
+                           help="Path to detailed .md file")
+    p_publish.add_argument("--vault", required=True,
+                           help="Path to Obsidian vault root")
+    p_publish.add_argument("--subfolder", default=None,
+                           help="Subfolder within vault (e.g. 'Meeting Notes')")
+    p_publish.add_argument("--title", default=None,
+                           help="Note title (default: auto-detected from .md)")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -1247,6 +1357,8 @@ def main():
         _run_insert_images(args)
     elif args.command == "render":
         _run_render(args)
+    elif args.command == "publish":
+        _run_publish(args)
 
 
 if __name__ == "__main__":

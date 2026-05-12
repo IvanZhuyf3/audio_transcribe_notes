@@ -75,3 +75,11 @@ Long-running process with state machine. State in `state.json` (atomic writes vi
 - File stability check before transcription — `file_stable()` waits for size to stop changing
 - One transcription at a time (GPU constraint)
 - DONE entries auto-pruned after 30 days
+
+## Opencode Skill
+
+Skill at `~/.config/opencode/skills/audio-transcribe/SKILL.md` — lets the AI agent run transcription on-demand instead of relying on the monitor daemon. Both interfaces coexist: CLI (`python transcribe.py`) and skill trigger.
+
+### Obsidian Publish Subcommand
+
+`python transcribe.py publish -d <detailed.md> --vault <path> [--subfolder X] [--title Y]` — extracts Obsidian publishing logic from monitor.py into a reusable CLI command. Reads `audio_start` from detailed.md metadata, generates clean.md, rewrites image paths, copies everything to vault.

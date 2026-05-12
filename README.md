@@ -138,6 +138,12 @@ insert-images flags:
 
 render flags:
   -d, --detailed         Path to detailed .md file (required)
+
+publish flags:
+  -d, --detailed         Path to detailed .md file (required)
+  --vault                Path to Obsidian vault root (required)
+  --subfolder            Subfolder within vault (e.g. 'Meeting Notes')
+  --title                Note title (default: auto-detected from .md)
 ```
 
 ## Prerequisites
