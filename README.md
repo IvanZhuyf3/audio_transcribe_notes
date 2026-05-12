@@ -21,7 +21,7 @@ Double-click `run_transcribe.bat`, paste the folder path, press Enter.
 
 ```bash
 # Activate the environment
-call C:\Users\Yifan\venv\audio_transcribe\Scripts\activate.bat
+call C:\Users\Yifan\venvs\audio_transcribe\Scripts\activate.bat
 
 # Run
 python transcribe.py --input ./my_meeting_folder
@@ -34,11 +34,13 @@ One Markdown file per audio recording, with images copied into an `images/` subf
 ```
 output/
 ├── meeting_1/
+│   ├── meeting_2026-03-28_14h00_detailed.md
 │   ├── meeting_2026-03-28_14h00.md
 │   └── images/
 │       ├── photo_001.jpg
 │       └── photo_002.jpg
 └── meeting_2/
+    ├── meeting_2026-03-28_16h30_detailed.md
     ├── meeting_2026-03-28_16h30.md
     └── images/
         └── photo_001.jpg
@@ -84,7 +86,7 @@ hf_token = YOUR_HF_TOKEN
 deepseek_api_key = YOUR_DEEPSEEK_KEY
 language = auto
 output_dir = output
-model = large
+model = large-v3
 device = cuda
 dictionary = dictionary.md
 ```
@@ -124,7 +126,7 @@ Pipeline / transcribe flags:
   --deepseek-api-key     DeepSeek API key for AI cleaning
   --dictionary           Path to domain dictionary file (default: dictionary.md)
   -l, --language         Language: auto, en, zh, ja, ko, fr, de, es (default: auto)
-  -m, --model            Whisper model: tiny, base, small, medium, large (default: large)
+  -m, --model            Whisper model: tiny, base, small, medium, large-v3 (default: large-v3)
   -d, --device           Device: cpu or cuda (default: cuda)
   -t, --title            Meeting title in the Markdown header
   --start-time           Manual audio start time override: "YYYY-MM-DD HH:MM:SS"
@@ -140,7 +142,7 @@ render flags:
 
 ## Prerequisites
 
-- **Python 3.13** with virtual environment at `C:\Users\Yifan\venv\audio_transcribe\`
+- **Python 3.13** with virtual environment at `C:\Users\Yifan\venvs\audio_transcribe\`
 - **FFmpeg** (for audio processing)
 - **NVIDIA GPU + CUDA** (optional, significantly faster)
 - **Hugging Face token** (required for speaker diarization)
@@ -153,10 +155,10 @@ render flags:
 
 ```bash
 # Create virtual environment (outside OneDrive)
-python -m venv C:\Users\Yifan\venv\audio_transcribe
+python -m venv C:\Users\Yifan\venvs\audio_transcribe
 
 # Activate and install dependencies
-call C:\Users\Yifan\venv\audio_transcribe\Scripts\activate.bat
+call C:\Users\Yifan\venvs\audio_transcribe\Scripts\activate.bat
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
 pip install whisperx
 pip install Pillow pillow-heif openai
@@ -184,6 +186,9 @@ Multiple meetings can live in the same folder — the script groups files automa
    image_folder = C:/Users/Yifan/SynologyDrive/MeetingPhotos
    obsidian_vault = C:/Users/Yifan/ObsidianVault
    obsidian_subfolder = Meeting Notes
+   poll_interval = 30
+   max_retries = 3
+   prune_done_after_days = 30
    ```
 
 2. Run the monitor:

@@ -16,8 +16,11 @@ Long-running background process that watches Synology-synced folders, auto-trans
 
 ```
 DISCOVERED → TRANSCRIBING → TRANSCRIBED → PUBLISHED → DONE
-     ↑            │                          ↑  │
-     └──(restart)─┘           (new images)──┘  └──(cleanup)
+     ↑            │         ↓                  ↑  │
+     └──(restart)─┘      FAILED               │  └──(cleanup)
+                            │                  │
+                            └──(max retries)───┘
+                         (new images)───────────┘
 ```
 
 - **DISCOVERED** — new audio detected, queued
@@ -25,6 +28,7 @@ DISCOVERED → TRANSCRIBING → TRANSCRIBED → PUBLISHED → DONE
 - **TRANSCRIBED** — detailed.md written, theme generated → immediately publishes
 - **PUBLISHED** — in Obsidian vault. Keeps scanning for new matching images until user marks done
 - **DONE** — user renamed/deleted Obsidian note → temp files cleaned up
+- **FAILED** — transcription error after max retries. Manual state reset needed to retry
 
 ### Main Loop (polling, 30s)
 
@@ -114,14 +118,16 @@ Full pipeline (backward compat) runs all three steps in sequence.
 | Function | Role |
 |---|---|
 | `scan_folder()` | Separate audio/image files by extension |
-| `get_audio_start_time()` | File creation time (Windows st_ctime) |
-| `get_audio_duration()` | ffprobe call |
+| `get_audio_metadata()` | Probe audio duration + media creation time via ffprobe |
+| `get_audio_start_time()` | Recording start time (media metadata → filesystem ctime fallback) |
+| `get_audio_duration()` | ffprobe call for duration only |
 | `get_photo_times()` | EXIF tag 36867 → datetime, fallback to mtime |
 | `group_meetings()` | Match photos to audio by time-range overlap |
 | `run_whisperx()` | Full ASR pipeline (load → transcribe → align → diarize) |
 | `insert_image_markers()` | Insert image markers into items list by timestamp offset |
 | `align_images()` | Wrap whisperx segments as items + call insert_image_markers |
 | `ai_clean()` | DeepSeek V3 correction with numbered-segment protocol |
+| `load_dictionary()` | Read dictionary.md into text string for ai_clean |
 | `_copy_image()` | Copy image to images dir, HEIC→JPG conversion |
 | `parse_detailed_markdown()` | Parse detailed .md back to structured items |
 | `insert_images_to_markdown()` | Standalone image insertion into existing detailed .md |
@@ -161,7 +167,7 @@ All pipeline flags (`--hf-token`, `--language`, `--model`, etc.) work on both th
 
 ```bash
 # Activate venv (stored outside OneDrive)
-call C:\Users\Yifan\.virtualenvs\audio_transcribe\Scripts\activate.bat
+call C:\Users\Yifan\venvs\audio_transcribe\Scripts\activate.bat
 
 # Full pipeline
 python transcribe.py --input ./my_meeting_folder
