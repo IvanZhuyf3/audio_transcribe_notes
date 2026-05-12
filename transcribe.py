@@ -207,72 +207,235 @@ def group_meetings(
     return meetings
 
 
-# ── Transcription (whisperx) ───────────────────────────────────────
+# ── Transcription (Qwen3-ASR) ────────────────────────────────────────
 
-def run_whisperx(
+def _vad_split(wav: "np.ndarray", max_seconds: float = 180.0) -> list[tuple[int, int, "np.ndarray"]]:
+    """Split audio at VAD speech boundaries into chunks <= max_seconds.
+
+    Returns list of (start_sample, end_sample, wav_chunk).
+    """
+    import numpy as np
+    from silero_vad import load_silero_vad, get_speech_timestamps
+
+    sr = 16000
+    max_samples = int(max_seconds * sr)
+
+    vad_model = load_silero_vad(onnx=True)
+    speech_ts = get_speech_timestamps(
+        wav, vad_model, sampling_rate=sr,
+        min_speech_duration_ms=1500, min_silence_duration_ms=500,
+    )
+
+    if not speech_ts:
+        return [(0, len(wav), wav)]
+
+    # Collect split points: boundaries from VAD speech segments
+    split_points = [0]
+    for seg in speech_ts:
+        split_points.append(seg["start"])
+        split_points.append(seg["end"])
+    split_points.append(len(wav))
+    split_points = sorted(set(split_points))
+
+    # Build chunks, merging small segments up to max_seconds
+    chunks = []
+    chunk_start = split_points[0]
+    for sp in split_points[1:]:
+        if sp - chunk_start >= max_samples and sp > chunk_start:
+            chunks.append((chunk_start, sp, wav[chunk_start:sp]))
+            chunk_start = sp
+    if chunk_start < len(wav):
+        remaining = wav[chunk_start:]
+        if chunks and len(remaining) < sr * 2:
+            # Merge tiny tail into last chunk
+            last_s, last_e, last_w = chunks[-1]
+            chunks[-1] = (last_s, len(wav), wav[last_s:len(wav)])
+        else:
+            chunks.append((chunk_start, len(wav), remaining))
+
+    return chunks if chunks else [(0, len(wav), wav)]
+
+
+def _merge_chars_with_speakers(
+    chars: list[dict],
+    speaker_turns: list[tuple[float, float, str]],
+) -> list[dict]:
+    """Merge character-level timestamps with speaker labels.
+
+    chars: [{text, start, end}, ...]
+    speaker_turns: [(start, end, speaker), ...]
+    Returns: [{start, end, text, speaker}, ...] grouped by speaker.
+    """
+    if not chars or not speaker_turns:
+        # No diarization — return as-is with unknown speaker
+        return [
+            {"start": c["start"], "end": c["end"], "text": c["text"], "speaker": "Speaker ?"}
+            for c in chars
+        ]
+
+    # Assign each char to the speaker with most overlap
+    char_speakers = []
+    for c in chars:
+        best_speaker = "Speaker ?"
+        best_overlap = 0.0
+        for sp_start, sp_end, sp_label in speaker_turns:
+            overlap = max(0, min(c["end"], sp_end) - max(c["start"], sp_start))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_speaker = sp_label
+        char_speakers.append(best_speaker)
+
+    # Group consecutive same-speaker chars into segments
+    segments = []
+    cur_speaker = char_speakers[0] if char_speakers else "Speaker ?"
+    cur_text = []
+    cur_start = chars[0]["start"] if chars else 0.0
+    cur_end = chars[0]["end"] if chars else 0.0
+
+    for i, c in enumerate(chars):
+        sp = char_speakers[i]
+        if sp != cur_speaker and cur_text:
+            segments.append({
+                "start": cur_start,
+                "end": cur_end,
+                "text": "".join(cur_text),
+                "speaker": cur_speaker,
+            })
+            cur_speaker = sp
+            cur_start = c["start"]
+            cur_text = []
+        cur_text.append(c["text"])
+        cur_end = c["end"]
+
+    if cur_text:
+        segments.append({
+            "start": cur_start,
+            "end": cur_end,
+            "text": "".join(cur_text),
+            "speaker": cur_speaker,
+        })
+
+    return segments
+
+
+def _map_language(code: str | None) -> str | None:
+    """Map short CLI language codes to Qwen3-ASR full names."""
+    mapping = {
+        "zh": "Chinese", "en": "English", "ja": "Japanese",
+        "ko": "Korean", "fr": "French", "de": "German", "es": "Spanish",
+    }
+    if not code or code == "auto":
+        return None
+    return mapping.get(code, code.title())
+
+
+def run_qwen3_asr(
     audio_path: Path,
     hf_token: str,
     language: str | None = None,
-    model_name: str = "large",
+    model_name: str = "Qwen/Qwen3-ASR-1.7B",
     device: str = "cuda",
 ) -> list[dict]:
-    """Run whisperx transcription with diarization.
+    """Run Qwen3-ASR transcription with pyannote speaker diarization.
 
     Returns list of segments: [{start, end, text, speaker}]
     """
-    import torch
-    import whisperx
+    import gc
 
-    print(f"  Loading model '{model_name}' on {device}...")
-    asr_pipeline = whisperx.load_model(
+    import numpy as np
+    import torch
+    from qwen_asr import Qwen3ASRModel
+
+    # ── Step 1: Load audio ──────────────────────────────────────────
+    print("  Loading audio...")
+    import librosa
+    wav, sr = librosa.load(str(audio_path), sr=16000, mono=True)
+    duration = len(wav) / sr
+    print(f"  Duration: {duration:.1f}s")
+
+    # ── Step 2: VAD split if needed (ForcedAligner limit: 180s) ─────
+    aligner_name = "Qwen/Qwen3-ForcedAligner-0.6B"
+    max_chunk = 180.0
+    if duration > max_chunk:
+        print(f"  Splitting audio into <= {max_chunk:.0f}s chunks (VAD)...")
+        chunks = _vad_split(wav, max_seconds=max_chunk)
+        print(f"  Split into {len(chunks)} chunks")
+    else:
+        chunks = [(0, len(wav), wav)]
+
+    # ── Step 3: Load Qwen3-ASR + ForcedAligner ──────────────────────
+    print(f"  Loading model '{model_name}' with ForcedAligner on {device}...")
+    model = Qwen3ASRModel.from_pretrained(
         model_name,
-        device=device,
-        compute_type="default",
-        language=language if language != "auto" else None,
+        forced_aligner=aligner_name,
+        forced_aligner_kwargs=dict(dtype=torch.bfloat16, device_map=device),
+        dtype=torch.bfloat16,
+        device_map=device,
     )
 
-    print("  Transcribing...")
-    audio = whisperx.load_audio(str(audio_path))
-    result = asr_pipeline.transcribe(audio, batch_size=16)
+    # ── Step 4: Transcribe each chunk ───────────────────────────────
+    lang_param = _map_language(language)
+    all_chars = []
 
-    language_detected = result.get("language", language or "unknown")
-    print(f"  Detected language: {language_detected}")
-
-    # Align for word-level timestamps
-    print("  Aligning...")
-    try:
-        model_a, metadata = whisperx.load_align_model(
-            language_code=result["language"], device=device
+    for i, (start_s, end_s, chunk_wav) in enumerate(chunks):
+        offset_s = start_s / sr
+        chunk_tag = f"  Chunk {i+1}/{len(chunks)}" if len(chunks) > 1 else "  Transcribing"
+        print(f"{chunk_tag}...")
+        results = model.transcribe(
+            audio=(chunk_wav, sr),
+            language=lang_param,
+            return_time_stamps=True,
         )
-        result = whisperx.align(
-            result["segments"],
-            model_a,
-            metadata,
-            audio,
-            device,
-        )
-    except Exception as e:
-        print(f"  Warning: Alignment failed ({e}), using segment-level timestamps")
+        for r in results:
+            if r.time_stamps:
+                for ts in r.time_stamps:
+                    all_chars.append({
+                        "text": ts.text,
+                        "start": ts.start_time + offset_s,
+                        "end": ts.end_time + offset_s,
+                    })
 
-    # Diarize
+    detected_lang = results[0].language if results else (language or "unknown")
+    print(f"  Detected language: {detected_lang}")
+
+    # ── Step 5: Free ASR model from GPU ─────────────────────────────
+    del model
+    gc.collect()
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+    if not all_chars:
+        print("  Warning: No transcription produced")
+        return []
+
+    # ── Step 6: Speaker diarization (pyannote) ──────────────────────
+    speaker_turns = []
     print("  Running speaker diarization...")
     try:
-        from whisperx.diarize import DiarizationPipeline
-        diarize_pipeline = DiarizationPipeline(token=hf_token, device=device)
-        diarize_segments = diarize_pipeline(
-            str(audio_path),
-        )
-        result = whisperx.assign_word_speakers(diarize_segments, result)
+        from pyannote.audio import Pipeline as PyannotePipeline
+        diarize_pipeline = PyannotePipeline.from_pretrained(
+            "pyannote/speaker-diarization-community-1",
+            token=hf_token,
+        ).to(torch.device(device))
+        audio_data = {
+            "waveform": torch.from_numpy(wav[None, :]),
+            "sample_rate": sr,
+        }
+        diarization = diarize_pipeline(audio_data)
+        for turn, _, speaker in diarization.speaker_diarization.itertracks(yield_label=True):
+            speaker_turns.append((turn.start, turn.end, speaker))
+        print(f"  Found {len(set(s for _, _, s in speaker_turns))} speaker(s)")
+        del diarize_pipeline
+        gc.collect()
+        if device == "cuda":
+            torch.cuda.empty_cache()
     except Exception as e:
         print(f"  Warning: Diarization failed ({e}), skipping speaker labels")
 
-    # Clean up GPU memory if applicable
-    if device == "cuda":
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    return result.get("segments", [])
+    # ── Step 7: Merge chars with speakers ───────────────────────────
+    segments = _merge_chars_with_speakers(all_chars, speaker_turns)
+    print(f"  Produced {len(segments)} segments")
+    return segments
 
 
 # ── Image alignment ────────────────────────────────────────────────
@@ -316,7 +479,7 @@ def align_images(
     photo_times: list[tuple[datetime, Path]],
     audio_start: datetime,
 ) -> list[dict]:
-    """Convert whisperx segments to items, then insert image markers."""
+    """Convert ASR segments to items, then insert image markers."""
     items = []
     for seg in segments:
         items.append({
@@ -754,7 +917,7 @@ def load_config() -> configparser.ConfigParser:
             "deepseek_api_key": "",
             "language": "auto",
             "output_dir": "output",
-            "model": "large",
+            "model": "Qwen/Qwen3-ASR-1.7B",
             "device": "cuda",
             "dictionary": "dictionary.md",
         }
@@ -779,7 +942,7 @@ def _add_pipeline_args(parser, input_required=True):
                         choices=["auto", "en", "zh", "ja", "ko", "fr", "de", "es"],
                         help="Language (default: auto)")
     parser.add_argument("--model", "-m", default=None,
-                        help="Whisper model size (default: large)")
+                        help="ASR model: 0.6B or 1.7B (default: Qwen/Qwen3-ASR-1.7B)")
     parser.add_argument("--device", "-d", default=None,
                         choices=["cpu", "cuda"], help="Device (default: cuda)")
     parser.add_argument("--start-time", default=None,
@@ -801,7 +964,7 @@ def _resolve_defaults(args, config):
         "hf_token": args.hf_token or defaults.get("hf_token", ""),
         "language": args.language or defaults.get("language", "auto"),
         "output_dir": args.output or defaults.get("output_dir", "output"),
-        "model_name": args.model or defaults.get("model", "large"),
+        "model_name": args.model or defaults.get("model", "Qwen/Qwen3-ASR-1.7B"),
         "device": args.device or defaults.get("device", "cuda"),
         "title": args.title or "Meeting Notes",
         "no_clean": args.no_clean,
@@ -865,7 +1028,7 @@ def _run_pipeline(args, config):
         print(f"  Start time: {audio_start}")
         print(f"{'='*60}")
 
-        segments = run_whisperx(
+        segments = run_qwen3_asr(
             audio_path, opts["hf_token"], opts["language"],
             opts["model_name"], opts["device"],
         )
@@ -940,7 +1103,7 @@ def _run_transcribe(args, config):
         print(f"  Start time: {audio_start}")
         print(f"{'='*60}")
 
-        segments = run_whisperx(
+        segments = run_qwen3_asr(
             audio_path, opts["hf_token"], opts["language"],
             opts["model_name"], opts["device"],
         )

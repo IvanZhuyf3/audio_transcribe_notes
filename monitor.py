@@ -34,7 +34,7 @@ from transcribe import (
     load_config,
     load_dictionary,
     parse_detailed_markdown,
-    run_whisperx,
+    run_qwen3_asr,
     scan_folder,
 )
 
@@ -242,11 +242,11 @@ def _do_transcribe(state: dict, key: str, config):
     defaults = config["defaults"]
 
     # Transcribe with WhisperX
-    segments = run_whisperx(
+    segments = run_qwen3_asr(
         audio_path,
         defaults.get("hf_token", ""),
         defaults.get("language", "auto"),
-        defaults.get("model", "large"),
+        defaults.get("model", "Qwen/Qwen3-ASR-1.7B"),
         defaults.get("device", "cuda"),
     )
 

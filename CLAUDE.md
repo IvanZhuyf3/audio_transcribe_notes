@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-Single-script meeting notes generator: takes a folder of audio recordings + photos, produces illustrated Markdown transcripts with speaker labels and inline images. Uses WhisperX for transcription/diarization and DeepSeek V3 for AI-powered term correction.
+Single-script meeting notes generator: takes a folder of audio recordings + photos, produces illustrated Markdown transcripts with speaker labels and inline images. Uses Qwen3-ASR for transcription + pyannote for speaker diarization and DeepSeek V3 for AI-powered term correction.
 
 ## Architecture
 
@@ -24,7 +24,7 @@ DISCOVERED → TRANSCRIBING → TRANSCRIBED → PUBLISHED → DONE
 ```
 
 - **DISCOVERED** — new audio detected, queued
-- **TRANSCRIBING** — WhisperX running (one at a time, GPU). Crash → revert to DISCOVERED
+- **TRANSCRIBING** — Qwen3-ASR + pyannote running (one at a time, GPU). Crash → revert to DISCOVERED
 - **TRANSCRIBED** — detailed.md written, theme generated → immediately publishes
 - **PUBLISHED** — in Obsidian vault. Keeps scanning for new matching images until user marks done
 - **DONE** — user renamed/deleted Obsidian note → temp files cleaned up
@@ -83,12 +83,12 @@ Step 1: transcribe (audio → detailed.md)
     │
     ├─ group_meetings() ──► [{audio_path, audio_start, duration}]
     │
-    └─ Per meeting:
-         ├─ run_whisperx() ──► [{start, end, text, speaker}]
-         │
-         ├─ ai_clean() (optional) ──► corrected items[]
-         │
-         └─ generate_markdown() ──► *_detailed.md
+     └─ Per meeting:
+          ├─ run_qwen3_asr() ──► [{start, end, text, speaker}]
+          │
+          ├─ ai_clean() (optional) ──► corrected items[]
+          │
+          └─ generate_markdown() ──► *_detailed.md
               Includes <!-- audio_start: ISO --> metadata for later parsing
 
 Step 2: insert-images (photos → detailed.md, in-place)
@@ -123,9 +123,11 @@ Full pipeline (backward compat) runs all three steps in sequence.
 | `get_audio_duration()` | ffprobe call for duration only |
 | `get_photo_times()` | EXIF tag 36867 → datetime, fallback to mtime |
 | `group_meetings()` | Match photos to audio by time-range overlap |
-| `run_whisperx()` | Full ASR pipeline (load → transcribe → align → diarize) |
+| `run_qwen3_asr()` | Full ASR pipeline (Qwen3-ASR + ForcedAligner + pyannote diarization) |
+| `_vad_split()` | Split audio at VAD boundaries into <=180s chunks |
+| `_merge_chars_with_speakers()` | Merge char-level timestamps with speaker labels |
 | `insert_image_markers()` | Insert image markers into items list by timestamp offset |
-| `align_images()` | Wrap whisperx segments as items + call insert_image_markers |
+| `align_images()` | Wrap ASR segments as items + call insert_image_markers |
 | `ai_clean()` | DeepSeek V3 correction with numbered-segment protocol |
 | `load_dictionary()` | Read dictionary.md into text string for ai_clean |
 | `_copy_image()` | Copy image to images dir, HEIC→JPG conversion |
@@ -151,12 +153,13 @@ All pipeline flags (`--hf-token`, `--language`, `--model`, etc.) work on both th
 
 ### External Dependencies
 
-- **WhisperX** (whisperx) — ASR with word-level alignment + pyannote speaker diarization
+- **Qwen3-ASR** (qwen-asr) — ASR with forced alignment (char-level timestamps, 180s limit)
 - **PyTorch + CUDA** — GPU inference backend
 - **FFmpeg/ffprobe** — audio duration probing (external binary)
 - **Pillow + pillow-heif** — image reading, EXIF parsing, HEIC→JPG conversion
 - **OpenAI client** — used to call DeepSeek API (OpenAI-compatible endpoint)
-- **pyannote** (via HF token) — speaker diarization model
+- **silero-vad** — voice activity detection for splitting long audio (>180s) into chunks
+- **pyannote** (via HF token) — speaker diarization model (used directly, not via WhisperX)
 
 ### Configuration
 
@@ -189,9 +192,8 @@ run_monitor.bat
 
 ### Venv packages (not in requirements.txt)
 
-`requirements.txt` only lists Pillow/pillow-heif/openai. The actual heavy deps are installed separately:
+`requirements.txt` lists Pillow/pillow-heif/openai/qwen-asr/pyannote-audio/silero-vad. Heavy deps installed separately:
 - `torch`, `torchaudio` (CUDA 12.6 wheel)
-- `whisperx`
 
 ## Output Structure
 
@@ -214,4 +216,5 @@ output/
 - **AI cleaning is optional** — `--no-clean` flag or missing DeepSeek key skips it gracefully
 - **HEIC support** — pillow-heif registered as opener, converted to JPG on output for compatibility
 - **Multi-meeting** — multiple audio files in one folder are auto-grouped; photos assigned to the first audio whose time span contains them
+- **180s alignment limit** — Qwen3 ForcedAligner only provides char-level timestamps up to 180s; longer audio is split via VAD beforehand
 - **All file I/O uses `encoding="utf-8"`** — Windows Chinese locale defaults to GBK; every `open()`/`read_text()`/`write_text()` must specify encoding explicitly. Do not run inline Python scripts that read project files without encoding — it will fail on GBK.

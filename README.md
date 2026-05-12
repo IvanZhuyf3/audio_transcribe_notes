@@ -86,7 +86,7 @@ hf_token = YOUR_HF_TOKEN
 deepseek_api_key = YOUR_DEEPSEEK_KEY
 language = auto
 output_dir = output
-model = large-v3
+model = Qwen/Qwen3-ASR-1.7B
 device = cuda
 dictionary = dictionary.md
 ```
@@ -126,7 +126,7 @@ Pipeline / transcribe flags:
   --deepseek-api-key     DeepSeek API key for AI cleaning
   --dictionary           Path to domain dictionary file (default: dictionary.md)
   -l, --language         Language: auto, en, zh, ja, ko, fr, de, es (default: auto)
-  -m, --model            Whisper model: tiny, base, small, medium, large-v3 (default: large-v3)
+  -m, --model            ASR model name (default: Qwen/Qwen3-ASR-1.7B)
   -d, --device           Device: cpu or cuda (default: cuda)
   -t, --title            Meeting title in the Markdown header
   --start-time           Manual audio start time override: "YYYY-MM-DD HH:MM:SS"
@@ -160,7 +160,7 @@ python -m venv C:\Users\Yifan\venvs\audio_transcribe
 # Activate and install dependencies
 call C:\Users\Yifan\venvs\audio_transcribe\Scripts\activate.bat
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
-pip install whisperx
+pip install qwen-asr silero-vad pyannote-audio
 pip install Pillow pillow-heif openai
 ```
 

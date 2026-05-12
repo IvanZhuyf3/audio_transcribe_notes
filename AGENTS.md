@@ -11,17 +11,24 @@ Architecture details live in `CLAUDE.md` — read it for function reference, dat
 ### Venv & Dependencies
 
 - **Venv path**: `C:\Users\Yifan\venvs\audio_transcribe\` (bat files are truth, not CLAUDE.md's `~/.virtualenvs/`)
-- **requirements.txt is incomplete** — only lists Pillow/pillow-heif/openai. Heavy deps installed separately:
+- **requirements.txt is incomplete** — lists Pillow/pillow-heif/openai/qwen-asr/pyannote-audio/silero-vad. Heavy deps installed separately:
   - `torch` + `torchaudio` from PyTorch CUDA 12.6 wheel (`--index-url https://download.pytorch.org/whl/cu126`)
-  - `whisperx` (pip install, brings pyannote)
 - **FFmpeg/ffprobe must be on PATH** — external binary called via subprocess for audio duration probing
 - **Python 3.13**
 
 ### Config & Secrets
 
 - `config.ini` is **gitignored** (contains plaintext HF token + DeepSeek API key). Auto-created on first run with empty fields.
-- Default model is `large-v3` (not `large` — CLAUDE.md is stale on this).
+- Default model is `Qwen/Qwen3-ASR-1.7B` (effective: 1.7B).
 - `dictionary.md` is tracked — domain terms fed to DeepSeek for ASR correction.
+
+### ASR Architecture
+
+- **Qwen3-ASR** (`run_qwen3_asr()`) — core transcription via qwen-asr package
+- **ForcedAligner** — provides char-level timestamps from Qwen3 outputs (180s limit)
+- **silero-vad** — splits long audio files into <180s chunks before alignment
+- **pyannote-audio** — speaker diarization called directly (not via WhisperX)
+- Helper functions: `_vad_split()` (VAD-based chunking), `_merge_chars_with_speakers()` (char-level speaker mapping)
 
 ### No Test Suite
 
@@ -34,7 +41,7 @@ Architecture details live in `CLAUDE.md` — read it for function reference, dat
   set HF_HUB_DISABLE_SYMLINKS_WARNING=1
   python transcribe.py --input ./test --output ./test_output --language en
   ```
-- No git repo, no CI — no automated verification exists.
+- Git repo: https://github.com/IvanZhuyf3/audio_transcribe_notes — no CI/CD.
 
 ## Windows Encoding Gotcha
 
