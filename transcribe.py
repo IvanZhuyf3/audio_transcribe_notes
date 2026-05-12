@@ -262,7 +262,7 @@ def _build_sentence_segments(
     """Split transcription text into sentence-level segments with timing.
 
     text: full transcription with punctuation (from result.text).
-    time_stamps: char-level timestamps (from result.time_stamps), no punctuation.
+    time_stamps: word-level ForcedAlignItem list (each has .text, .start_time, .end_time).
     offset_s: seconds offset for this chunk within the full audio.
 
     Returns: [{start, end, text}, ...] split at sentence boundaries.
@@ -272,42 +272,67 @@ def _build_sentence_segments(
     # Sentence-ending punctuation (Chinese + English)
     SENTENCE_END = set("。！？!?.")
 
-    # Build alignment: walk text chars, skipping punctuation to consume time_stamps
-    char_timing = []  # (char_index_in_text, start, end) for non-punct chars
+    # Build alignment: map each word's text position to its timing.
+    # ForcedAligner returns word-level items. Walk through text and
+    # match each timestamp's word to its position in the full text.
+    PUNCT = set("，。！？、；：""''（）【】《》…—,.!?;:'\"()[]{}/\u3000 ")
+    word_timing = []  # (start_char_idx, end_char_idx, start_s, end_s)
     ts_idx = 0
-    for text_idx, ch in enumerate(text):
-        if ts_idx >= len(time_stamps):
-            break
-        # Punctuation chars in text have no corresponding timestamp
-        if ch in "，。！？、；：""''（）【】《》…—,.!?;:'\"()[]{}/\u3000 ":
-            continue
-        ts = time_stamps[ts_idx]
-        char_timing.append((text_idx, ts.start_time + offset_s, ts.end_time + offset_s))
-        ts_idx += 1
+    text_pos = 0
 
-    if not char_timing:
+    while ts_idx < len(time_stamps) and text_pos < len(text):
+        # Skip punctuation in text
+        if text[text_pos] in PUNCT:
+            text_pos += 1
+            continue
+
+        ts = time_stamps[ts_idx]
+        ts_word = ts.text
+        ts_word_len = len(ts_word)
+
+        # Try to match ts_word at current text position
+        if text[text_pos:text_pos + ts_word_len].lower() == ts_word.lower():
+            word_timing.append((
+                text_pos,
+                text_pos + ts_word_len,
+                ts.start_time + offset_s,
+                ts.end_time + offset_s,
+            ))
+            text_pos += ts_word_len
+            ts_idx += 1
+        else:
+            # Character-level fallback (CJK): one char per timestamp
+            word_timing.append((
+                text_pos,
+                text_pos + 1,
+                ts.start_time + offset_s,
+                ts.end_time + offset_s,
+            ))
+            text_pos += 1
+            ts_idx += 1
+
+    if not word_timing:
         return []
 
     # Split text at sentence-ending punctuation, preserving timing
     segments = []
-    seg_start_idx = 0  # index into char_timing
+    seg_start = 0  # char index into text
 
     for i in range(len(text)):
         if text[i] in SENTENCE_END or i == len(text) - 1:
-            # Find the char_timing range for text[seg_start_idx:i+1]
-            # Get text slice including the punctuation
-            seg_text = text[seg_start_idx:i + 1].strip()
+            seg_text = text[seg_start:i + 1].strip()
             if not seg_text:
+                seg_start = i + 1
                 continue
 
-            # Find first and last char_timing entries in this range
+            # Find first and last word timing within this segment's char range
             first_ts = None
             last_ts = None
-            for ct_text_idx, ct_start, ct_end in char_timing:
-                if seg_start_idx <= ct_text_idx <= i:
+            for ws, we, wt_start, wt_end in word_timing:
+                if ws >= seg_start and ws <= i:
                     if first_ts is None:
-                        first_ts = (ct_start, ct_end)
-                    last_ts = (ct_start, ct_end)
+                        first_ts = (wt_start, wt_end)
+                    last_ts = (wt_start, wt_end)
 
             if first_ts and last_ts:
                 segments.append({
@@ -315,7 +340,7 @@ def _build_sentence_segments(
                     "end": last_ts[1],
                     "text": seg_text,
                 })
-            seg_start_idx = i + 1
+            seg_start = i + 1
 
     return segments
 
@@ -401,6 +426,7 @@ def run_qwen3_asr(
         forced_aligner_kwargs=dict(dtype=torch.bfloat16, device_map=device),
         dtype=torch.bfloat16,
         device_map=device,
+        max_new_tokens=2048,
     )
 
     # ── Step 4: Transcribe each chunk ───────────────────────────────
