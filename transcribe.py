@@ -532,7 +532,7 @@ def ai_clean(
     items: list[dict],
     api_key: str,
     dictionary_text: str,
-    model: str = "deepseek-chat",
+    model: str = "deepseek-v4-flash",
 ) -> list[dict]:
     """Use DeepSeek V3 to correct mis-transcribed terms in the transcript.
 
@@ -575,7 +575,7 @@ def ai_clean(
         "Output ALL segments, not just the corrected ones."
     )
 
-    print("  AI cleaning with DeepSeek V3...")
+    print("  AI cleaning with DeepSeek...")
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
     try:
@@ -586,6 +586,7 @@ def ai_clean(
                 {"role": "user", "content": transcript},
             ],
             temperature=0.0,
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as e:
         print(f"  Warning: AI cleaning failed ({e}), using raw transcript")
@@ -619,7 +620,7 @@ def ai_clean(
 def generate_theme(
     transcript_text: str,
     api_key: str,
-    model: str = "deepseek-chat",
+    model: str = "deepseek-v4-flash",
 ) -> str:
     """Use DeepSeek to generate a short 2-4 word title from transcript text."""
     from openai import OpenAI
@@ -645,6 +646,7 @@ def generate_theme(
                 {"role": "user", "content": text},
             ],
             temperature=0.3,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         theme = response.choices[0].message.content.strip()
         # Sanitize for filename
