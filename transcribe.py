@@ -783,7 +783,7 @@ def _add_pipeline_args(parser, input_required=True):
     parser.add_argument("--device", "-d", default=None,
                         choices=["cpu", "cuda"], help="Device (default: cuda)")
     parser.add_argument("--start-time", default=None,
-                        help="Manual audio start time override: 'YYYY-MM-DD HH:MM:SS'")
+                        help="Manual audio start time override: 'YYYY-MM-DD HH:MM:SS' (single audio file only)")
     parser.add_argument("--title", "-t", default=None,
                         help="Meeting title (default: 'Meeting Notes')")
     parser.add_argument("--no-clean", action="store_true",

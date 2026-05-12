@@ -7,6 +7,9 @@ echo.
 
 call C:\Users\Yifan\venvs\audio_transcribe\Scripts\activate.bat
 
+set PYTHONIOENCODING=utf-8
+set HF_HUB_DISABLE_SYMLINKS_WARNING=1
+
 set /p INPUT_DIR="Enter folder path containing audio and photos: "
 
 if "%INPUT_DIR%"=="" (
