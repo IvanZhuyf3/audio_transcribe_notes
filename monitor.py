@@ -36,6 +36,8 @@ from transcribe import (
     parse_detailed_markdown,
     run_qwen3_asr,
     scan_folder,
+    strip_header as _strip_header,
+    consolidate_memory as _consolidate_memory,
 )
 
 
@@ -319,15 +321,14 @@ def publish_to_obsidian(state: dict, key: str, config):
     # Determine Obsidian target paths
     mon = config["monitor"]
     duration = item.get("duration", 0)
-    if duration and duration < 180:
+    is_memory = duration and duration < 180
+    if is_memory:
         subfolder = mon.get("memory_subfolder", "Memory")
     else:
         subfolder = mon.get("obsidian_subfolder", "")
     vault_path = Path(mon["obsidian_vault"]) / subfolder
     vault_path.mkdir(parents=True, exist_ok=True)
 
-    title = item["title"]
-    obsidian_md = vault_path / f"{title}.md"
     obsidian_img_dir = vault_path / "images" / img_subdir
 
     # Copy images
@@ -338,8 +339,16 @@ def publish_to_obsidian(state: dict, key: str, config):
             if img.is_file():
                 shutil.copy2(img, obsidian_img_dir / img.name)
 
-    # Write Obsidian .md
-    obsidian_md.write_text(content, encoding="utf-8")
+    if is_memory:
+        date_str = audio_start.strftime("%Y-%m-%d")
+        time_heading = f"## {audio_start.strftime('%H:%M')}"
+        body = _strip_header(content)
+        obsidian_md = vault_path / f"{date_str}.md"
+        _consolidate_memory(obsidian_md, time_heading, body, date_str)
+    else:
+        title = item["title"]
+        obsidian_md = vault_path / f"{title}.md"
+        obsidian_md.write_text(content, encoding="utf-8")
 
     item.update({
         "state": "PUBLISHED",
@@ -348,7 +357,7 @@ def publish_to_obsidian(state: dict, key: str, config):
         "obsidian_img_dir": str(obsidian_img_dir),
     })
     save_state(state)
-    print(f"  [PUBLISHED] {title}.md → Obsidian")
+    print(f"  [PUBLISHED] {obsidian_md.name} → Obsidian")
 
 
 def scan_images_for_published(state: dict, image_folder: Path, config):

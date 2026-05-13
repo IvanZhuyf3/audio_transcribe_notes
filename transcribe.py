@@ -1323,6 +1323,83 @@ def _rewrite_obsidian_paths(md_text: str, img_subdir: str) -> str:
     )
 
 
+def _strip_header(content: str) -> str:
+    """Remove the header block (title, date, metadata, ---) from clean markdown."""
+    lines = content.split("\n")
+    # Find the first --- separator, return everything after it
+    for i, line in enumerate(lines):
+        if line.strip() == "---":
+            body = "\n".join(lines[i + 1:]).strip()
+            return body
+    return content.strip()
+
+
+def _consolidate_memory(
+    target_file: Path,
+    time_heading: str,
+    body: str,
+    date_str: str,
+) -> None:
+    """Append or insert a memory entry into a date-file, ordered by time.
+
+    target_file: path to YYYY-MM-DD.md
+    time_heading: e.g. "## 19:27"
+    body: the entry content (speaker paragraphs, images)
+    date_str: e.g. "2026-05-12"
+    """
+    entry = f"{time_heading}\n\n{body}\n"
+
+    if not target_file.exists():
+        target_file.write_text(f"# {date_str}\n\n{entry}", encoding="utf-8")
+        return
+
+    existing = target_file.read_text(encoding="utf-8")
+    # Parse existing entries: each starts with "## HH:MM"
+    # Split into segments: header + entries
+    header_end = 0
+    lines = existing.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            header_end = i
+            break
+    else:
+        # No existing entries, just append
+        target_file.write_text(existing.rstrip("\n") + "\n\n" + entry, encoding="utf-8")
+        return
+
+    header = "\n".join(lines[:header_end])
+    # Parse entries: [(time_str, full_entry_text), ...]
+    entries = []
+    current_time = None
+    current_lines = []
+    for line in lines[header_end:]:
+        if line.startswith("## "):
+            if current_time is not None:
+                entries.append((current_time, "\n".join(current_lines)))
+            current_time = line[3:].strip()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+    if current_time is not None:
+        entries.append((current_time, "\n".join(current_lines)))
+
+    # Insert new entry at correct position
+    new_time = time_heading[3:].strip()
+    inserted = False
+    result_entries = []
+    for t, entry_text in entries:
+        if not inserted and t >= new_time:
+            result_entries.append(entry)
+            inserted = True
+        result_entries.append(entry_text)
+    if not inserted:
+        result_entries.append(entry)
+
+    # Rebuild file
+    body_text = "\n".join(result_entries).strip()
+    target_file.write_text(f"{header}\n\n{body_text}\n", encoding="utf-8")
+
+
 def publish_to_obsidian(
     detailed_path: Path,
     vault_path: Path,
@@ -1332,6 +1409,7 @@ def publish_to_obsidian(
     """Publish a detailed.md to Obsidian vault.
 
     Generates clean .md, rewrites image paths, copies images and .md to vault.
+    For short recordings (<3min), consolidates into a daily Memory file.
     Returns the path to the published .md file.
     """
     # Parse audio_start from detailed.md metadata
@@ -1349,27 +1427,15 @@ def publish_to_obsidian(
     content = clean_path.read_text(encoding="utf-8")
     content = _rewrite_obsidian_paths(content, img_subdir)
 
-    # Determine title
-    if not title:
-        title = parsed.get("title", "Meeting Notes")
-        # Fallback to filename stem if default title
-        if title == "Meeting Notes":
-            title = detailed_path.parent.name
-
-    # Sanitize title for filesystem
-    assert title is not None  # guaranteed by above logic
-    title = re.sub(r'[\\/*?:"<>|]', "", title)
-    title = re.sub(r"\s+", " ", title).strip()[:80] or "Meeting"
-
     # Classify: <3min → Memory, else use provided subfolder
     audio_duration = parsed.get("audio_duration")
-    if audio_duration is not None and audio_duration < 180 and not subfolder:
+    is_memory = audio_duration is not None and audio_duration < 180 and not subfolder
+    if is_memory:
         subfolder = "Memory"
 
-    # Target paths
+    # Target directory
     target_dir = vault_path / subfolder if subfolder else vault_path
     target_dir.mkdir(parents=True, exist_ok=True)
-    obsidian_md = target_dir / f"{title}.md"
     obsidian_img_dir = target_dir / "images" / img_subdir
 
     # Copy images
@@ -1380,8 +1446,28 @@ def publish_to_obsidian(
             if img.is_file():
                 shutil.copy2(img, obsidian_img_dir / img.name)
 
-    # Write .md
-    obsidian_md.write_text(content, encoding="utf-8")
+    if is_memory:
+        # Consolidate into daily file
+        date_str = audio_start.strftime("%Y-%m-%d")
+        time_heading = f"## {audio_start.strftime('%H:%M')}"
+        body = _strip_header(content)
+        obsidian_md = target_dir / f"{date_str}.md"
+        _consolidate_memory(obsidian_md, time_heading, body, date_str)
+    else:
+        # Determine title for meeting notes
+        if not title:
+            title = parsed.get("title", "Meeting Notes")
+            if title == "Meeting Notes":
+                title = detailed_path.parent.name
+
+        # Sanitize title for filesystem
+        assert title is not None
+        title = re.sub(r'[\\/*?:"<>|]', "", title)
+        title = re.sub(r"\s+", " ", title).strip()[:80] or "Meeting"
+
+        obsidian_md = target_dir / f"{title}.md"
+        obsidian_md.write_text(content, encoding="utf-8")
+
     print(f"  Published: {obsidian_md}")
     if src_images.exists():
         print(f"  Images:    {obsidian_img_dir}")
