@@ -594,10 +594,10 @@ def ai_clean(
         "You are correcting ASR transcription errors in a professional meeting transcript. "
         "The speaker uses domain-specific terms and abbreviations that are often mis-transcribed.\n\n"
         f"{dict_section}\n"
-        "Below is the transcript with numbered segments. Correct any mis-transcribed words or phrases, especially:\n"
-        "- Terms that appear in the dictionary but are spelled wrong or split into letters\n"
-        "- Abbreviations spoken as individual letters (e.g. \"S R S\" should be \"SRS\")\n"
-        "- Technical terms that sound similar to common words (e.g. \"Ramen\" → \"Raman\")\n\n"
+        "The dictionary lists the correct forms of terms. Use it to spot near-miss ASR errors: "
+        "words that sound similar to a dictionary term are likely mis-transcriptions "
+        "(e.g. \"Ramen\" → \"Raman\", \"stocks\" → \"Stokes\", \"S R S\" → \"SRS\").\n\n"
+        "Below is the transcript with numbered segments. Correct any mis-transcribed words or phrases. "
         "Output the corrected transcript using the same numbered format: [1] corrected text\\n[2] corrected text\\n...\n"
         "Only change words that are clearly errors. Do not rewrite or paraphrase. "
         "Output ALL segments, not just the corrected ones.\n\n"
@@ -606,11 +606,11 @@ def ai_clean(
         "These are terms a domain expert would want saved for future ASR correction.\n"
         "Use this exact format:\n"
         "---NEW TERMS---\n"
-        "- ABBREVIATION → full form\n"
-        "- TERM (if no abbreviation)\n\n"
-        "Examples of good entries: \"- SRS → stimulated Raman scattering\", \"- Stokes beam\", "
-        "\"- FWHM → full width at half maximum\"\n"
-        "Examples of BAD entries (do NOT include): \"- Ramen → Raman\" (this is a correction, not a term), "
+        "- full term (ABBR)\n"
+        "- term without abbreviation\n\n"
+        "Examples of good entries: \"- stimulated Raman scattering (SRS)\", \"- Stokes beam\", "
+        "\"- full width at half maximum (FWHM)\"\n"
+        "Examples of BAD entries (do NOT include): \"- Ramen → Raman\" (correction, not a term), "
         "\"- nonlinear\" (common word, not domain-specific)\n\n"
         "Rules:\n"
         "- Only include terms that would benefit from being in a persistent dictionary\n"
@@ -688,19 +688,18 @@ def _append_new_terms(
     existing_dict_text: str,
 ) -> None:
     """Append new terms to dictionary.md, skipping duplicates."""
-    # Parse existing terms for dedup
+    # Parse existing terms for dedup (extract term before parentheses or whole entry)
     existing_terms = set()
     for line in existing_dict_text.split("\n"):
         line = line.strip()
         if line.startswith("- "):
-            # Extract the key (before →)
-            key = line[2:].split("→")[0].strip().lower()
+            key = line[2:].strip().lower()
             existing_terms.add(key)
 
     # Filter out duplicates
     to_add = []
     for entry in new_terms:
-        key = entry[2:].split("→")[0].strip().lower()
+        key = entry[2:].strip().lower()
         if key not in existing_terms:
             to_add.append(entry)
             existing_terms.add(key)
