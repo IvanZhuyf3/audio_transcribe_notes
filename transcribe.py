@@ -696,6 +696,7 @@ def parse_detailed_markdown(md_path: Path) -> dict:
 
     title = ""
     audio_start = None
+    audio_duration = None
     items = []
 
     # ── Parse header ──
@@ -715,6 +716,9 @@ def parse_detailed_markdown(md_path: Path) -> dict:
         elif line.startswith("<!-- audio_start:"):
             ts = line.split("audio_start:", 1)[1].split("-->", 1)[0].strip()
             audio_start = datetime.fromisoformat(ts)
+        elif line.startswith("<!-- audio_duration:"):
+            dur_str = line.split("audio_duration:", 1)[1].split("-->", 1)[0].strip()
+            audio_duration = float(dur_str)
         elif line.strip() == "---":
             i += 1
             break
@@ -752,7 +756,7 @@ def parse_detailed_markdown(md_path: Path) -> dict:
         else:
             text_items[j]["end"] = text_items[j]["start"] + 30
 
-    return {"title": title, "audio_start": audio_start, "items": items}
+    return {"title": title, "audio_start": audio_start, "audio_duration": audio_duration, "items": items}
 
 
 def insert_images_to_markdown(md_path: Path, image_paths: list[Path]) -> Path:
@@ -856,6 +860,7 @@ def generate_markdown(
     output_dir: Path,
     meeting_title: str,
     audio_start: datetime,
+    duration: float | None = None,
 ) -> Path:
     """Write the final Markdown file and copy images."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -871,10 +876,10 @@ def generate_markdown(
         "",
         f"**Date:** {audio_start.strftime('%Y-%m-%d %H:%M')}",
         f"<!-- audio_start: {audio_start.isoformat()} -->",
-        "",
-        "---",
-        "",
     ]
+    if duration is not None:
+        lines.append(f"<!-- audio_duration: {duration:.1f} -->")
+    lines += ["", "---", ""]
 
     photo_counter = 0
     for item in items:
@@ -1102,7 +1107,7 @@ def _run_pipeline(args, config):
 
         meeting_title = f"{opts['title']} — {audio_path.stem}" if len(meetings) > 1 else opts["title"]
         per_meeting_output = output_folder / f"meeting_{i}"
-        detailed_path = generate_markdown(items, per_meeting_output, meeting_title, audio_start)
+        detailed_path = generate_markdown(items, per_meeting_output, meeting_title, audio_start, duration)
         clean_path = clean_markdown(detailed_path)
 
         print(f"\n  Detailed: {detailed_path}")
@@ -1186,7 +1191,7 @@ def _run_transcribe(args, config):
 
         meeting_title = f"{opts['title']} — {audio_path.stem}" if len(meetings) > 1 else opts["title"]
         per_meeting_output = output_folder / f"meeting_{i}"
-        detailed_path = generate_markdown(items, per_meeting_output, meeting_title, audio_start)
+        detailed_path = generate_markdown(items, per_meeting_output, meeting_title, audio_start, duration)
 
         print(f"\n  Detailed: {detailed_path}")
 
@@ -1284,6 +1289,11 @@ def publish_to_obsidian(
     assert title is not None  # guaranteed by above logic
     title = re.sub(r'[\\/*?:"<>|]', "", title)
     title = re.sub(r"\s+", " ", title).strip()[:80] or "Meeting"
+
+    # Classify: <3min → Memory, else use provided subfolder
+    audio_duration = parsed.get("audio_duration")
+    if audio_duration is not None and audio_duration < 180 and not subfolder:
+        subfolder = "Memory"
 
     # Target paths
     target_dir = vault_path / subfolder if subfolder else vault_path

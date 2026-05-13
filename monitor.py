@@ -318,7 +318,12 @@ def publish_to_obsidian(state: dict, key: str, config):
 
     # Determine Obsidian target paths
     mon = config["monitor"]
-    vault_path = Path(mon["obsidian_vault"]) / mon.get("obsidian_subfolder", "")
+    duration = item.get("duration", 0)
+    if duration and duration < 180:
+        subfolder = mon.get("memory_subfolder", "Memory")
+    else:
+        subfolder = mon.get("obsidian_subfolder", "")
+    vault_path = Path(mon["obsidian_vault"]) / subfolder
     vault_path.mkdir(parents=True, exist_ok=True)
 
     title = item["title"]
@@ -467,6 +472,7 @@ def load_monitor_config() -> dict:
             "image_folder": "",
             "obsidian_vault": "",
             "obsidian_subfolder": "Meeting Notes",
+            "memory_subfolder": "Memory",
             "poll_interval": "30",
             "max_retries": "3",
             "prune_done_after_days": "30",
