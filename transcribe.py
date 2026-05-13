@@ -559,11 +559,13 @@ def ai_clean(
     api_key: str,
     dictionary_text: str,
     model: str = "deepseek-v4-flash",
+    dictionary_path: Path | None = None,
 ) -> list[dict]:
-    """Use DeepSeek V3 to correct mis-transcribed terms in the transcript.
+    """Use DeepSeek to correct mis-transcribed terms in the transcript.
 
     Sends the full transcript as a numbered list to DeepSeek along with the
     domain dictionary. Returns items with corrected text fields.
+    If dictionary_path is provided, newly identified terms are appended to it.
     """
     from openai import OpenAI
 
@@ -598,7 +600,23 @@ def ai_clean(
         "- Technical terms that sound similar to common words (e.g. \"Ramen\" → \"Raman\")\n\n"
         "Output the corrected transcript using the same numbered format: [1] corrected text\\n[2] corrected text\\n...\n"
         "Only change words that are clearly errors. Do not rewrite or paraphrase. "
-        "Output ALL segments, not just the corrected ones."
+        "Output ALL segments, not just the corrected ones.\n\n"
+        "After the corrected transcript, list any DOMAIN-SPECIFIC terms, abbreviations, or named concepts "
+        "you encountered that are NOT already in the reference dictionary. "
+        "These are terms a domain expert would want saved for future ASR correction.\n"
+        "Use this exact format:\n"
+        "---NEW TERMS---\n"
+        "- ABBREVIATION → full form\n"
+        "- TERM (if no abbreviation)\n\n"
+        "Examples of good entries: \"- SRS → stimulated Raman scattering\", \"- Stokes beam\", "
+        "\"- FWHM → full width at half maximum\"\n"
+        "Examples of BAD entries (do NOT include): \"- Ramen → Raman\" (this is a correction, not a term), "
+        "\"- nonlinear\" (common word, not domain-specific)\n\n"
+        "Rules:\n"
+        "- Only include terms that would benefit from being in a persistent dictionary\n"
+        "- Skip common English words and generic scientific terms\n"
+        "- Skip terms already in the reference dictionary\n"
+        "- If no new terms found, omit the ---NEW TERMS--- section"
     )
 
     print("  AI cleaning with DeepSeek...")
@@ -618,7 +636,16 @@ def ai_clean(
         print(f"  Warning: AI cleaning failed ({e}), using raw transcript")
         return items
 
-    corrected_text = response.choices[0].message.content.strip()
+    raw = response.choices[0].message.content.strip()
+
+    # Split response into corrections and new terms
+    new_terms_section = ""
+    if "---NEW TERMS---" in raw:
+        parts = raw.split("---NEW TERMS---", 1)
+        corrected_text = parts[0].strip()
+        new_terms_section = parts[1].strip()
+    else:
+        corrected_text = raw
 
     # Parse corrected lines back
     corrections = {}
@@ -640,7 +667,52 @@ def ai_clean(
                 changed += 1
 
     print(f"  AI cleaning done: {changed} segment(s) corrected")
+
+    # Parse and save new terms to dictionary
+    if new_terms_section and dictionary_path:
+        new_terms = []
+        for line in new_terms_section.split("\n"):
+            line = line.strip()
+            if line.startswith("- "):
+                new_terms.append(line)
+
+        if new_terms:
+            _append_new_terms(dictionary_path, new_terms, dictionary_text)
+
     return items
+
+
+def _append_new_terms(
+    dictionary_path: Path,
+    new_terms: list[str],
+    existing_dict_text: str,
+) -> None:
+    """Append new terms to dictionary.md, skipping duplicates."""
+    # Parse existing terms for dedup
+    existing_terms = set()
+    for line in existing_dict_text.split("\n"):
+        line = line.strip()
+        if line.startswith("- "):
+            # Extract the key (before →)
+            key = line[2:].split("→")[0].strip().lower()
+            existing_terms.add(key)
+
+    # Filter out duplicates
+    to_add = []
+    for entry in new_terms:
+        key = entry[2:].split("→")[0].strip().lower()
+        if key not in existing_terms:
+            to_add.append(entry)
+            existing_terms.add(key)
+
+    if not to_add:
+        return
+
+    # Append to file
+    existing = dictionary_path.read_text(encoding="utf-8").rstrip("\n")
+    new_block = "\n" + "\n".join(to_add)
+    dictionary_path.write_text(existing + new_block + "\n", encoding="utf-8")
+    print(f"  Added {len(to_add)} new term(s) to {dictionary_path.name}")
 
 
 def generate_theme(
@@ -1101,7 +1173,7 @@ def _run_pipeline(args, config):
 
         if not opts["no_clean"] and opts["deepseek_api_key"]:
             dictionary_text = load_dictionary(opts["dictionary_path"])
-            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text, model=opts["deepseek_model"])
+            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text, model=opts["deepseek_model"], dictionary_path=opts["dictionary_path"])
         elif not opts["no_clean"] and not opts["deepseek_api_key"]:
             print("  Skipping AI cleaning (no DeepSeek API key — set in config.ini or use --deepseek-api-key)")
 
@@ -1185,7 +1257,7 @@ def _run_transcribe(args, config):
 
         if not opts["no_clean"] and opts["deepseek_api_key"]:
             dictionary_text = load_dictionary(opts["dictionary_path"])
-            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text, model=opts["deepseek_model"])
+            items = ai_clean(items, opts["deepseek_api_key"], dictionary_text, model=opts["deepseek_model"], dictionary_path=opts["dictionary_path"])
         elif not opts["no_clean"] and not opts["deepseek_api_key"]:
             print("  Skipping AI cleaning (no DeepSeek API key — set in config.ini or use --deepseek-api-key)")
 

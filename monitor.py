@@ -270,7 +270,7 @@ def _do_transcribe(state: dict, key: str, config):
     if api_key:
         dict_path = Path(__file__).parent / defaults.get("dictionary", "dictionary.md")
         dict_text = load_dictionary(dict_path)
-        items = ai_clean(items, api_key, dict_text, model=deepseek_model)
+        items = ai_clean(items, api_key, dict_text, model=deepseek_model, dictionary_path=dict_path)
 
     # Generate theme
     transcript = " ".join(it["text"] for it in items if it["type"] == "text")
